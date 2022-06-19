@@ -1,0 +1,643 @@
+---
+title: "Data Upload Trial 1"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(readr)
+library(tidyverse)
+library(Stat2Data)
+library(dplyr)
+library("survey")
+library(mosaic)
+library(ggplot2)
+library(lattice)
+library(srvyr)
+library(glmnet)
+library(ROCR)  
+library(boot)        # for cv.glm()
+library(ggrepel)     # for labeling outliers
+library(knitr) 
+install.packages("stargazer")
+library("stargazer") # creating nice tables to integrate into written paper
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+psam_pusa <- read_csv("Downloads/csv_pus/psam_pusa.csv")
+View(psam_pusa)
+
+psam_pusb <- read_csv("Downloads/csv_pus/psam_pusb.csv")
+View(psam_pusb)
+```
+
+```{r}
+psam_pusa1 <- psam_pusa %>%
+  select(RT, SERIALNO, DIVISION, SPORDER, REGION, PUMA, ST, ADJINC, AGEP, CIT, CITWP, ENG, FER, MAR, SCHL, SEX, YOEP, ESP, NATIVITY, OC, PINCP, WAGP, PWGTP)
+
+psam_pusa2 <- psam_pusa1 %>%
+  filter(NATIVITY == 2,
+         CIT != 1,
+         CIT != 2,
+         CIT != 3) %>%
+  mutate(ST = as.numeric(ST))
+
+psam_pusb1 <- psam_pusb %>%
+  select(RT, SERIALNO, DIVISION, SPORDER, REGION, PUMA, ST, ADJINC, AGEP, CIT, CITWP, ENG, FER, MAR, SCHL, SEX, YOEP, ESP, NATIVITY, OC, PINCP, WAGP, PWGTP)
+
+psam_pusb2 <- psam_pusb1 %>%
+  filter(NATIVITY == 2,
+         CIT != 1,
+         CIT != 2,
+         CIT != 3)
+
+psam_pusab <- bind_rows(psam_pusa2, psam_pusb2)
+
+#weight <- psam_pusab %>%
+  #summarize(weight = sum(PWGTP))
+
+psam_pusab <- psam_pusab %>%
+   rename(state = "ST",
+         age = "AGEP",
+         citizenship_status = "CIT",
+         year_naturalized = "CITWP",
+         level_english = "ENG",
+         recent_child = "FER",
+         marital_status = "MAR",
+         school_achievement = "SCHL",
+         year_entry = "YOEP",
+         employ_parent = "ESP",
+         nativity = "NATIVITY",
+         have_child = "OC") %>%
+  mutate(year_birth = 2020 - age,
+         age_entry = year_entry - year_birth,
+         length_residence = age - age_entry,
+         naturalized = ifelse(citizenship_status == 4,1,0),
+        not_naturalized = ifelse(citizenship_status ==5, 1, 0),
+        eligible_nat = ifelse(length_residence >= 5, 1, 0),
+        parent = ifelse(have_child == 1, 1, 0),
+         parent_naturalize = ifelse(naturalized == 1 & parent == 1, 1, 0))
+
+       
+final_data <- psam_pusab %>%
+   mutate(speaks_english = 
+            ifelse(level_english == 1 | level_english == 1, 1, 0),
+          male = ifelse(SEX == 1,1,0),
+          school_achievement_numeric = as.numeric(school_achievement),
+          education_1 = ifelse(school_achievement_numeric < 09, 0, 1),
+          education_2 = ifelse(school_achievement_numeric < 16, 0, 1),
+          education_3 = ifelse(school_achievement_numeric < 21, 0, 1)) %>%
+  rename(not_adj_income = "PINCP") %>%
+  select(SERIALNO, state, ADJINC, age, year_entry, have_child, not_adj_income, PWGTP, year_birth, age_entry, year_naturalized, length_residence, naturalized, eligible_nat, parent, parent_naturalize, speaks_english, male, education_1, education_2, education_3, marital_status )
+
+
+write_csv(final_data, "~/PSCI 350 Data/final_data.csv")
+
+final_data <- read_csv("~/PSCI 350 Data/final_data.csv")
+
+#psam_pusab %>%
+  #names()
+
+
+```
+
+EDA Plots and Information:
+
+```{r}
+# number statistics for main variables
+summary(final_data2$age)
+summary(final_data$year_naturalized) 
+summary(final_data2$year_entry)
+ssummary(final_data$year_birth)
+summary(final_data$age_entry)
+summary(final_data2$length_residence)
+
+# Histograms for above variables
+histogram(~age, data = final_data)
+histogram(~year_naturalized, data = final_data)
+histogram(~year_entry, data = final_data)
+histogram(~year_birth, data = final_data)
+histogram(~age_entry, data = final_data)
+histogram(~length_residence, data = final_data2)
+
+# naturalized
+final_data2 %>%
+  ggplot(aes(x = naturalized)) +
+  geom_bar() +
+    labs( x = "Naturalized",
+       y = "Number",
+       title = "Fig.7: Naturalized versus Non-Naturalized Foreigners in the U.S.")+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# parents - very small number that actually are parents
+final_data2 %>%
+  ggplot(aes(x = parent)) +
+  geom_bar() +
+    labs( x = "Parent",
+       y = "Number",
+       title = "Fig.8: Parents vs Non-Parents")+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# speaks English
+final_data2 %>%
+  ggplot(aes(x = speaks_english)) +
+  geom_bar() +
+    labs( x = "Speaks English",
+       y = "Number",
+       title = "Fig.8: Non-English Speakers versus English Speakers")+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# gender
+final_data2 %>%
+  ggplot(aes(x = male)) +
+  geom_bar() +
+    labs( x = "0 = Female, 1 = Male",
+       y = "Number",
+       title = "Fig.8: Male Versus Female Distribution")+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# marital status
+final_data2 %>%
+  ggplot(aes(x = marital_status)) +
+  geom_bar() +
+    labs(caption = "1 = Married, 2 = Widowed, 3 = Divorced, 4 = Separated, 5 = Never Married",
+    x = "Marital Status",
+       y = "Number",
+       title = "Fig.8: Marital Status")+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# length of residence and speaks english
+final_data2 %>%
+  ggplot(aes(x = as.character(naturalized), y = age)) +
+  geom_boxplot() +
+    labs(caption = "0 = Not Naturalized, 1 = Naturalized,",
+    x = "Naturalized",
+       y = "Number",
+       title = "Fig.8: Naturalization and Age")+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# parents naturalized
+final_data2 %>%
+ggplot(aes(as.factor(naturalized), ..count..)) + geom_bar(aes(fill = as.factor(parent)), position = "dodge") +
+  labs(caption = "0 = Not Naturalized, 1 = Naturalized",
+       x = "Naturalized",
+       y = "Count",
+       fill = "Parental Status")
+
+
+# correlation matrix
+final_data2%>%
+  select(1:15)%>%
+  cor(use = "complete.obs")
+
+final_data%>%
+  select(5,9)%>%
+ pairs()
+
+
+# testing model in survey package
+mnodelsurvey <- svyglm(parent_naturalize ~ speaks_english, data = final_data, design(weights = PWGTP))
+model1 <- glm(parent_naturalize ~ speaks_english, data = final_data)
+summary(model1)
+
+dstrat<-svydesign(id=~1, strata=~stype, weights=~PWGTP, data= final_data, fpc=~fpc)
+```
+
+```{r}
+# trying to work through weights - only works with price (NOT OPTION)
+
+# creating sample size
+#final_data$us_pop <- 331449281
+
+# creating survey design
+final_design <- svydesign(ids = ~1, # no clusters
+                                  probs = NULL, # hence no cluster sampling
+                                  strata = NULL,
+                                  weights = final_data$PWGTP,
+                          data = final_data) # data object used as input
+
+final_design2 <- svydesign(ids = ~1,
+                           probs = NULL,
+                           strata = NULL,
+                           weights = final_data2$PWGTP,
+                           data = final_data2)
+  #svymean(~age, final_design, na.rm = TRUE)
+
+#output <- svyglm(naturalized ~ parent + male,
+          #family = gaussian(),
+          #data   = final_data,
+          #design = final_design)
+
+#summary(output)
+
+```
+
+```{r}
+# Recreating Models - only recreating one (because quesiton of timing is not relevant in US context)
+
+# Table 1: Logistic Models of Citizenship Status, Comparing Parents and Nonparents
+
+
+# Model 1: Citizenship Status and Parenthood in the U.S.
+model_replicate <- svyglm(naturalized ~ parent + male + marital_status + age + age2 + length_residence + length_residence2 + education_1 + education_2 + education_3,
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model_replicate)
+exp(model_replicate$coefficients)
+
+# find averages for
+#marriage, age, length of residence, woman, education
+
+#age: 50 years old
+#marriage: married
+# length of residence: 27 years
+# gender: female
+# education: education_2 = 1 (high school at min)
+
+# type = "response" gives a predicted probability
+predict_at <- tibble(age = 50, marital_status = 1, length_residence = 27, male = 0, education_1 = 0, education_2 = 1, education_3 = 0, parent = 1, age2 = 2500, length_residence2 = 729)
+
+predict(model_replicate, new = predict_at, type = "response")
+
+predict_at <- tibble(age = 50, marital_status = 1, length_residence = 27, male = 0, education_1 = 0, education_2 = 1, education_3 = 0, age2 = 2500, length_residence2 = 729, parent = 0)
+predict(model_replicate, new = predict_at, type = "response")
+
+# parent interpretation: After controlling for gender, marital status, age, length of residence, and education level, a parent has 1.3 times higher odds of naturalizing compared to non-parents. 
+
+# trying to export model in nice format using stargazer package
+stargazer(model_replicate, type = "text", title = "Replicated Street Model", style = "ajps", notes.align = "l")
+
+# residuals do not makes sense with logistic regression - that is why the plots are so weird
+# par(mfrow = c(2, 2), mar = c(2, 2, 2, 2)) 
+# plot(model_replicate, which = c(1, 2, 3, 5))
+# par(mfrow = c(1, 1), mar = c(5.1, 4.1, 4.1, 2.1))
+
+```
+
+```{r}
+# creating my own models 
+
+model1 <- svyglm(naturalized ~ age,
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model1)
+par(mfrow = c(2, 2), mar = c(2, 2, 2, 2)) 
+plot(model1, which = c(1, 2, 3, 5))
+par(mfrow = c(1, 1), mar = c(5.1, 4.1, 4.1, 2.1))
+
+# age as predictor of naturalization - significant
+
+model2 <- svyglm(naturalized ~ year_entry, 
+              family = gaussian (),
+              data = final_data2,
+              design = final_design2)
+summary(model2)
+# year_entry as predictor of naturalization - significant
+
+model3 <- svyglm(naturalized ~ not_adj_income, 
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model3)
+# not_adj_income as predictor of naturalization - significant
+
+model4 <- svyglm(naturalized ~ year_birth,
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model4)
+# year_birth as predictor of naturalization - significant
+
+model5 <- svyglm(naturalized ~ speaks_english, 
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model5)
+# speaks_english as predictor of naturalization - significant
+
+model6 <- svyglm(naturalized ~ parent, 
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model6)
+# parent as predictor of naturalization - significant
+
+model7 <- svyglm(naturalized ~ male, 
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model7)
+# male (gender) as predictor of naturalization - significant
+
+model8 <- svyglm(naturalized ~ education_1, 
+                 family = gaussian (),
+                 data = final_data2,
+                 design = final_design2)
+summary(model8)
+# finished elementary school - significant
+
+
+model9 <- svyglm(naturalized ~ education_2,
+                 family = gaussian(),
+                 data = final_data2,
+                 design = final_design2)
+summary(model9)
+# finshed high school - significant
+
+model10 <- svyglm(naturalized ~ education_3, 
+                  family = gaussian (),
+                  data = final_data2,
+                  design = final_design2)
+summary(model10)
+# finished university - significant
+
+model11 <- svyglm(naturalized ~ education_2 + education_3,
+                  family = gaussian (),
+                  data = final_data2,
+                  design = final_design2)
+
+summary(model11)
+# three levels of education together - all significant
+
+model12 <- svyglm(naturalized ~ year_naturalized,
+                  family = gaussian (),
+                  data = final_data2,
+                  design = final_design2)
+summary(model12)
+# year_naturalized not significant
+
+model13 <- svyglm(naturalized ~ length_residence,
+                  family = gaussian (),
+                  data = final_data2,
+                  design = final_design2)
+summary(model13)
+# length of residence significant
+
+model14 <- svyglm(naturalized ~ marital_status,
+                  family = gaussian (),
+                  data = final_data2,
+                  design = final_design2)
+summary(model14)
+# marital status significant
+
+# not going to use both year_birth and year_entry bc highly correlated (6.7) so going to pick year of entry to US
+```
+
+```{r}
+# STEPWISE SELECTION
+step_data <- final_data2 %>%
+  drop_na(age) %>%
+  drop_na(year_entry) %>%
+  drop_na(not_adj_income) %>%
+  drop_na(male) %>%
+  drop_na(parent) %>%
+  drop_na(education_1) %>%
+  drop_na(education_2) %>%
+  drop_na(education_3) %>%
+  drop_na(speaks_english) %>%
+  drop_na(length_residence) %>%
+  drop_na(marital_status) %>%
+  drop_na(PWGTP) %>%
+  drop_na(naturalized)
+
+# survey design for step data
+step_design <- svydesign(ids = ~1, # no clusters
+                                  probs = NULL, # hence no cluster sampling
+                                  strata = NULL,
+                                  weights = step_data$PWGTP,
+                          data = step_data)
+
+# model with no predictors
+model0 <- svyglm(naturalized ~ 1, 
+                 family = gaussian (),
+                 data = step_data,
+                 design = step_design)
+summary(model0)
+
+model_full <- svyglm(naturalized ~ age + year_entry + not_adj_income + male + parent + education_1 + education_2 + education_3 + speaks_english + length_residence + marital_status, 
+                     family = gaussian (),
+                     data = step_data,
+                     design = step_design)
+summary(model_full)
+
+
+### STEPWISE SELECTION (no cross-validation or test sets) ###
+step(model0, direction = "both", scope = formula(model_full))
+
+step_model <- svyglm(
+summary(step_model)
+
+par(mfrow = c(2, 2), mar = c(2, 2, 2, 2)) 
+plot(step_model, which = c(1, 2, 3, 5))
+par(mfrow = c(1, 1), mar = c(5.1, 4.1, 4.1, 2.1))
+```
+
+```{r}
+# sampling to fix vector issue problem
+
+final_data2 <- final_data %>%
+  select(age, naturalized, year_entry, not_adj_income, male, parent, education_1, education_2, education_3, speaks_english, length_residence, marital_status, PWGTP) %>%
+  filter(length_residence >= 5) %>%
+  mutate(age2 = age^2,
+         length_residence2 = length_residence^2) %>%
+  slice_sample(n = 151334)
+# confusion tables, test sample in order to evaluate plots
+final_data2 <- final_data2 %>%
+ drop_na(age) %>%
+  drop_na(naturalized) %>%
+  drop_na(year_entry) %>%
+  drop_na(not_adj_income) %>%
+  drop_na(male) %>%
+  drop_na(parent) %>%
+  drop_na(education_1) %>%
+  drop_na(education_2) %>%
+  drop_na(education_3) %>%
+  drop_na(speaks_english) %>%
+  drop_na(length_residence) %>%
+  drop_na(marital_status) %>%
+   drop_na(PWGTP) %>%
+   drop_na (age2) %>%
+   drop_na(length_residence2)
+
+```
+
+```{r}
+
+lasso_data <- final_data2 %>%
+  select(-PWGTP) %>%
+    drop_na(age) %>%
+  drop_na(year_entry) %>%
+  drop_na(not_adj_income) %>%
+  drop_na(male) %>%
+  drop_na(parent) %>%
+  drop_na(education_1) %>%
+  drop_na(education_2) %>%
+  drop_na(education_3) %>%
+  drop_na(speaks_english) %>%
+  drop_na(length_residence) %>%
+  drop_na(marital_status) %>%
+  # drop_na(PWGTP) %>%
+  drop_na(naturalized) %>%
+  drop_na(age2) %>%
+  drop_na(length_residence2)
+
+# removed NA values because otherwise rows and columns do not match and regression cannot be run
+
+
+# Trim off first column (intercept), leaving only the predictors
+X <- model.matrix(naturalized ~ ., lasso_data)[,-1] 
+
+# Create numeric vector of responses
+y <- as.numeric(lasso_data$naturalized) 
+
+# Choose a custom range for lambda: 1/100 to 1000 - changed size to see plot, originally was too zoomed in to see anything
+lambdas <- 10^seq(-5, 1, length = 100)
+
+# fit lasso with default lambdas
+fit.lasso <- glmnet(X, y, alpha = 1, lambda = lambdas)
+
+plot(fit.lasso, xvar = "lambda", label = TRUE)
+title(main = "Figure 4: Lasso Regression", line = 3, font.main = 1)
+
+# cross validation and lasso
+fit.lasso.cv <- cv.glmnet(X, y, alpha = 1, nfolds = 5)
+
+plot(fit.lasso.cv,main = " ")
+title(main = "Fig. 3: Lasso Regression with 5-fold Cross Validation", line = 3, font.main = 1)
+
+fit.lasso.cv$lambda.min
+fit.lasso.cv$lambda.1se
+
+# coefficients for the two lambda choices
+coef(fit.lasso.cv, s = "lambda.min")
+coef(fit.lasso.cv, s = "lambda.1se")
+# coef(fit.lasso.cv, s = lambdas[])
+
+# 63 gets only 4: year_entry, education_2, speaks_english, length_residence
+
+
+model_lasso <- svyglm(naturalized ~ age2 + year_entry + male + parent + education_1 + education_2 + education_3 + speaks_english + length_residence2 + marital_status, 
+                      family = gaussian,
+                      data = lasso_data,
+                      design = final_design2)
+summary(model_lasso)
+exp(coefficients(model_lasso))
+
+predict_at <- tibble(marital_status = 1, male = 0, education_1 = 0, education_2 = 1, education_3 = 0, parent = 1, age2 = 2500, length_residence2 = 729, speaks_english = 0, year_entry = 1993)
+
+predict(model_lasso, new = predict_at, type = "response")
+
+predict_at <- tibble(marital_status = 1, male = 0, education_1 = 0, education_2 = 1, education_3 = 0, age2 = 2500, length_residence2 = 729, parent = 0, speaks_english = 0, year_entry = 1993)
+predict(model_lasso, new = predict_at, type = "response")
+
+
+stargazer(model_lasso, type = "text", title = "Lasso Model Output", style = "ajps", notes.align = "l")
+
+par(mfrow = c(2, 2), mar = c(2, 2, 2, 2)) 
+plot(model_lasso, which = c(1, 2, 3, 5))
+par(mfrow = c(1, 1), mar = c(5.1, 4.1, 4.1, 2.1))
+
+```
+
+```{r}
+# confusion tables to verify models
+
+
+lasso_coefficients <- lasso_data %>%
+  select(-not_adj_income & -age)
+
+replicate_coefficients <- final_data2 %>%
+  select(naturalized, age, age2, length_residence, length_residence2, male, parent, education_1, education_2, education_3, marital_status)
+
+
+# generate predicted probs from model1a, then print condensed version of data
+
+
+# S3 method for svyglm
+predict(model_replicate,newdata=final_data2,total=NULL,
+                         type="response")
+
+
+
+
+final_data2_predict <- final_data2 %>%
+  mutate(predict_prob = predict(model_replicate,newdata=final_data2,total=NULL,
+                         type="response")) %>%
+  select(naturalized, age, age2, year_entry, male, parent, education_1, education_2, education_3, length_residence, length_residence2, marital_status, predict_prob)
+
+final_data2_predict
+ 
+
+predict_prob = predict(model_replicate, new_data = final_data2, type = "response")
+
+model.matrix(naturalized ~ .,lasso_data[-1]), s = model_lasso$lambda.1se, type = "response", data = lasso_data)
+
+final_data2_predict <- final_data2_predict %>%
+  mutate(predictYN = ifelse(predict_prob > .5, "Predict Naturalized", 
+                            "Predict_No_Naturalized"),
+         actualYN = ifelse(naturalized == 1, "Actual Naturalized", "Actual_No Naturalized"))
+final_data2_predict
+
+confuse <- table(final_data2_predict$actualYN, final_data2_predict$predictYN)
+confuse
+addmargins(confuse)
+
+#calculate overall success rate of predictions
+sum(diag(confuse)) / sum(confuse)
+
+
+```
+
+```{r}
+# working with weights - follow survey data example (pew research center)
+
+install.packages("remotes")
+remotes::install_github("r-lib/conflicted")
+remotes::install_github("pewresearch/pewmethods", build_vignettes = FALSE)
+library('pewmethods')
+install.packages(c("rworldmap", "ggrepel"))
+#library("rworldmap")
+library(ggrepel)
+
+names(final_data)
+
+tablena(final_data$naturalized)
+tablena(final_data$have_child) #same as parent(not numeric indicator)
+tablena(final_data$eligible_nat)
+tablena(final_data$parent)
+tablena(final_data$parent_naturalize)
+tablena(final_data$speaks_english)
+tablena(final_data$male)
+tablena(final_data$education_1)
+tablena(final_data$education_2)
+tablena(final_data$education_3)
+
+
+
+
+
+targets <- create_raking_targets(
+final_data,
+vars = c("recage", "sex:receduc"),
+wt = “weight”)
+
+```
+
+```{r}
+# another try at weights
+
+install.packages("weights")
+install.packages("Hmisc")
+library("Hmisc")
+library(weights)
+```
